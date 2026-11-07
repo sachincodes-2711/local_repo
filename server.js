@@ -2,17 +2,18 @@ const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const express = require("express");
 const cors = require("cors");
 const app = express();
-
 app.use(cors());
 
-// This object holds the waiting Stremio players
+// Holds the connection to Stremio
 const pendingRequests = {}; 
+// Tells the phone app what ID is currently waiting
+let currentPendingId = null; 
 
 const manifest = {
     id: "com.personal.remote.stream",
-    version: "1.0.0",
-    name: "Remote Phone Handoff",
-    description: "Bypass ads on your phone, stream automatically on Stremio.",
+    version: "2.0.0",
+    name: "Native App Handoff",
+    description: "Connects to your custom Android app for seamless scraping.",
     resources: ["stream"],
     types: ["movie"],
     idPrefixes: ["tt", "tmdb:"],
@@ -24,14 +25,10 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(({ type, id }) => {
     if (type === "movie") {
         const cleanId = id.split(":")[1] || id; 
-        
-        // REPLACE THIS LATER with your cloud URL (e.g., https://my-app.koyeb.app)
-        // For local testing, use your computer's local Wi-Fi IP address (e.g., 192.168.1.5)
-        const SERVER_URL = process.env.SERVER_URL || "https://stremio-proxy-xyz.onrender.com";
-        
+        const SERVER_URL = process.env.SERVER_URL || "https://your-cloud-url.onrender.com";
         return Promise.resolve({
             streams: [{
-                title: "Phone Handoff\n(Tap Bookmarklet)",
+                title: "Open Phone App",
                 url: `${SERVER_URL}/play/${cleanId}` 
             }]
         });
@@ -41,27 +38,32 @@ builder.defineStreamHandler(({ type, id }) => {
 
 app.use("/", getRouter(builder.getInterface()));
 
-// STREMIO HITS THIS: It holds the connection open and waits for your phone
+// 1. STREMIO HITS THIS: Holds the Stremio loading screen
 app.get("/play/:id", (req, res) => {
     const id = req.params.id;
-    console.log(`Stremio is waiting for video URL for ID: ${id}...`);
+    currentPendingId = id; // Tell the phone app this movie is waiting
+    console.log(`Stremio waiting for ID: ${id}`);
     
     pendingRequests[id] = (videoUrl) => {
-        console.log(`Success! Redirecting Stremio to real stream.`);
+        console.log(`Redirecting Stremio to real stream!`);
         res.redirect(videoUrl);
     };
 
-    // Timeout after 3 minutes if you don't push the link from your phone
     setTimeout(() => {
         if (pendingRequests[id]) {
-            console.log(`Timeout for ID: ${id}`);
-            res.status(404).send("Timeout: URL not received from phone.");
+            res.status(404).send("Timeout.");
             delete pendingRequests[id];
+            if (currentPendingId === id) currentPendingId = null;
         }
     }, 3 * 60 * 1000);
 });
 
-// YOUR PHONE HITS THIS: It receives the URL and triggers the play route above
+// 2. PHONE APP HITS THIS ON STARTUP: Asks what movie to load
+app.get("/pending", (req, res) => {
+    res.json({ id: currentPendingId });
+});
+
+// 3. PHONE APP HITS THIS AFTER ADS: Sends the intercepted MP4
 app.get("/push", (req, res) => {
     const id = req.query.id;
     const videoUrl = req.query.url;
@@ -69,13 +71,12 @@ app.get("/push", (req, res) => {
     if (pendingRequests[id]) {
         pendingRequests[id](videoUrl); 
         delete pendingRequests[id];
-        res.send("Success! Check your Stremio player, it should be playing now.");
+        currentPendingId = null; // Clear the queue
+        res.send("Success");
     } else {
-        res.send("Error: Stremio wasn't waiting for this movie.");
+        res.send("Error");
     }
 });
 
 const port = process.env.PORT || 7000;
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`Server running on port ${port}`));
