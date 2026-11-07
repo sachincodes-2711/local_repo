@@ -4,16 +4,14 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 
-// Holds the connection to Stremio
 const pendingRequests = {}; 
-// Tells the phone app what ID is currently waiting
 let currentPendingId = null; 
 
 const manifest = {
     id: "com.personal.remote.stream",
-    version: "2.0.0",
+    version: "3.0.0",
     name: "Native App Handoff",
-    description: "Connects to your custom Android app for seamless scraping.",
+    description: "Waits for phone to fetch the link before showing stream.",
     resources: ["stream"],
     types: ["movie"],
     idPrefixes: ["tt", "tmdb:"],
@@ -25,12 +23,33 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(({ type, id }) => {
     if (type === "movie") {
         const cleanId = id.split(":")[1] || id; 
-        const SERVER_URL = process.env.SERVER_URL || "https://your-cloud-url.onrender.com";
-        return Promise.resolve({
-            streams: [{
-                title: "Open Phone App",
-                url: `${SERVER_URL}/play/${cleanId}` 
-            }]
+        
+        // Return a Promise that stays unresolved until the phone sends the URL
+        return new Promise((resolve) => {
+            console.log(`Stremio requested streams for ${cleanId}. Waiting for phone...`);
+            currentPendingId = cleanId;
+            
+            // Save the resolve function so the /push route can trigger it
+            pendingRequests[cleanId] = (videoUrl) => {
+                console.log(`Link received! Sending stream to Stremio UI.`);
+                resolve({
+                    streams: [{
+                        title: "Stealth Stream\n1080p",
+                        url: videoUrl
+                    }]
+                });
+            };
+
+            // IMPORTANT: Stremio's UI times out add-on requests after ~30 seconds.
+            // We timeout at 25 seconds to gracefully show "No streams found" instead of an error.
+            setTimeout(() => {
+                if (pendingRequests[cleanId]) {
+                    console.log("Timeout waiting for phone.");
+                    delete pendingRequests[cleanId];
+                    if (currentPendingId === cleanId) currentPendingId = null;
+                    resolve({ streams: [] }); 
+                }
+            }, 25000);
         });
     }
     return Promise.resolve({ streams: [] });
@@ -38,32 +57,10 @@ builder.defineStreamHandler(({ type, id }) => {
 
 app.use("/", getRouter(builder.getInterface()));
 
-// 1. STREMIO HITS THIS: Holds the Stremio loading screen
-app.get("/play/:id", (req, res) => {
-    const id = req.params.id;
-    currentPendingId = id; // Tell the phone app this movie is waiting
-    console.log(`Stremio waiting for ID: ${id}`);
-    
-    pendingRequests[id] = (videoUrl) => {
-        console.log(`Redirecting Stremio to real stream!`);
-        res.redirect(videoUrl);
-    };
-
-    setTimeout(() => {
-        if (pendingRequests[id]) {
-            res.status(404).send("Timeout.");
-            delete pendingRequests[id];
-            if (currentPendingId === id) currentPendingId = null;
-        }
-    }, 3 * 60 * 1000);
-});
-
-// 2. PHONE APP HITS THIS ON STARTUP: Asks what movie to load
 app.get("/pending", (req, res) => {
     res.json({ id: currentPendingId });
 });
 
-// 3. PHONE APP HITS THIS AFTER ADS: Sends the intercepted MP4
 app.get("/push", (req, res) => {
     const id = req.query.id;
     const videoUrl = req.query.url;
@@ -71,10 +68,10 @@ app.get("/push", (req, res) => {
     if (pendingRequests[id]) {
         pendingRequests[id](videoUrl); 
         delete pendingRequests[id];
-        currentPendingId = null; // Clear the queue
+        currentPendingId = null;
         res.send("Success");
     } else {
-        res.send("Error");
+        res.send("Error: Timeout or invalid ID");
     }
 });
 
