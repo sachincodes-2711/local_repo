@@ -27,7 +27,7 @@ builder.defineStreamHandler(({ type, id }) => {
         
         // REPLACE THIS LATER with your cloud URL (e.g., https://my-app.koyeb.app)
         // For local testing, use your computer's local Wi-Fi IP address (e.g., 192.168.1.5)
-        const SERVER_URL = process.env.SERVER_URL || "https://my-stremio-addon.koyeb.app";
+        const SERVER_URL = process.env.SERVER_URL || "https://stremio-proxy-xyz.onrender.com";
         
         return Promise.resolve({
             streams: [{
