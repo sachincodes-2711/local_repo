@@ -49,7 +49,7 @@ builder.defineStreamHandler(({ type, id }) => {
                     if (currentPendingId === cleanId) currentPendingId = null;
                     resolve({ streams: [] }); 
                 }
-            }, 25000);
+            }, 60000);
         });
     }
     return Promise.resolve({ streams: [] });
